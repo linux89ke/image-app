@@ -65,12 +65,18 @@ if image_queue:
 
     with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED) as zipf:
         for name, image in image_queue:
-            st.markdown(f"**🖼️ {name}**")
-            st.image(image, caption="Original", use_column_width=True)
-
             cleaned = remove_white_bg(image)
-            st.image(cleaned, caption="Cleaned", use_column_width=True)
 
+            # Display side-by-side in two columns
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown(f"**🖼️ {name} – Original**")
+                st.image(image, width=300)
+            with col2:
+                st.markdown("**🧼 Cleaned**")
+                st.image(cleaned, width=300)
+
+            # Save cleaned image
             img_io = io.BytesIO()
             cleaned.save(img_io, format="JPEG")
             cleaned_filename = name  # Keep original name
