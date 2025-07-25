@@ -3,9 +3,10 @@ from PIL import Image, ImageColor
 import requests
 import io
 import os
+import zipfile
 
-st.set_page_config(page_title="Color Key Background Remover", layout="wide")
-st.title("🎯 White Background Remover")
+st.set_page_config(page_title="Batch Background Remover", layout="wide")
+st.title("🧼 Remove White Background (Keep Text & Tags)")
 
 def remove_white_bg(image: Image.Image, threshold=240, replace_color="#F2F2F2") -> Image.Image:
     image = image.convert("RGBA")
@@ -24,13 +25,13 @@ def remove_white_bg(image: Image.Image, threshold=240, replace_color="#F2F2F2") 
     image.putdata(newData)
     return image.convert("RGB")
 
-# Handle image uploads
-uploaded_files = st.file_uploader("📤 Upload images", type=["jpg", "jpeg", "png", "webp"], accept_multiple_files=True)
+# Upload section
+uploaded_files = st.file_uploader("📤 Upload image(s)", type=["jpg", "jpeg", "png", "webp"], accept_multiple_files=True)
+url = st.text_input("🔗 Or paste image URL (e.g. Jumia product image)")
 
-# Handle Jumia or image links
-url = st.text_input("🔗 Or paste an image URL (Jumia allowed)")
 image_queue = []
 
+# Add image from URL
 if url:
     try:
         headers = {
@@ -40,13 +41,13 @@ if url:
         response = requests.get(url, headers=headers)
         if response.status_code == 200:
             img = Image.open(io.BytesIO(response.content)).convert("RGBA")
-            image_queue.append(("linked_image", img))
+            image_queue.append(("linked_image.jpg", img))
         else:
-            st.error(f"Error loading image: {response.status_code}")
+            st.error(f"❌ Could not load image. HTTP {response.status_code}")
     except Exception as e:
-        st.error(f"⚠️ Could not fetch image: {e}")
+        st.error(f"⚠️ Error loading image: {e}")
 
-# Add uploaded images to queue
+# Add uploaded images
 if uploaded_files:
     for file in uploaded_files:
         try:
@@ -55,17 +56,35 @@ if uploaded_files:
         except:
             st.warning(f"{file.name} is not a valid image.")
 
-# Process all images
+# Process and store in memory for zip
+zip_buffer = io.BytesIO()
+processed_files = []
+
 if image_queue:
-    st.subheader("🧽 Cleaned Images")
-    for name, image in image_queue:
-        st.markdown(f"**🖼️ {name}**")
-        st.image(image, caption="Original", use_column_width=True)
+    st.subheader("✅ Processed Images")
 
-        cleaned = remove_white_bg(image)
-        st.image(cleaned, caption="Cleaned (Text/Tags Preserved)", use_column_width=True)
+    with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED) as zipf:
+        for name, image in image_queue:
+            st.markdown(f"**🖼️ {name}**")
+            st.image(image, caption="Original", use_column_width=True)
 
-        buf = io.BytesIO()
-        cleaned.save(buf, format="JPEG")
-        st.download_button("📥 Download Cleaned Image", data=buf.getvalue(),
-                           file_name=f"{os.path.splitext(name)[0]}_cleaned.jpg", mime="image/jpeg")
+            cleaned = remove_white_bg(image)
+            st.image(cleaned, caption="Cleaned", use_column_width=True)
+
+            img_io = io.BytesIO()
+            cleaned.save(img_io, format="JPEG")
+            cleaned_filename = f"{os.path.splitext(name)[0]}_cleaned.jpg"
+            zipf.writestr(cleaned_filename, img_io.getvalue())
+
+            processed_files.append((cleaned_filename, img_io.getvalue()))
+
+    st.success("✅ All images processed successfully.")
+
+    # Download ZIP
+    zip_buffer.seek(0)
+    st.download_button(
+        label="📦 Download All as ZIP",
+        data=zip_buffer,
+        file_name="cleaned_images.zip",
+        mime="application/zip"
+    )
