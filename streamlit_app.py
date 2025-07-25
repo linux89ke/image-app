@@ -2,89 +2,80 @@ import streamlit as st
 from PIL import Image, ImageColor, ImageFilter, UnidentifiedImageError
 import requests
 import io
+import os
+
 from rembg import remove, new_session
 
-st.set_page_config(page_title="Batch Image Cleaner", layout="wide")
-st.title("🧼 Batch Product Image Background Remover")
-st.markdown("Upload product images or paste **Jumia image URLs**. Background will be removed and replaced with a clean `#F2F2F2` backdrop.")
+st.set_page_config(page_title="Image BG Remover", layout="wide")
+st.title("🧼 Product Image Background Remover")
+st.markdown("Upload or paste links — we’ll clean the background and keep text/tags intact.")
 
-# Background color setup
-bg_color = ImageColor.getrgb("#F2F2F2")
+# Setup Rembg session with best quality model
+session = new_session("isnet-general-use")  # 🧠 Best model for sharp edges & preserving tags
 
-# Create rembg session once
-session = new_session("u2net")
-
-
-def process_image(image: Image.Image) -> Image.Image:
-    image = image.convert("RGBA")
+# Function to process image
+def process_image(image: Image.Image, bg_hex="#F2F2F2") -> Image.Image:
     cutout = remove(image, session=session)
 
-    # Soften edges
+    # Feather edges for smoothness
     alpha = cutout.split()[3].filter(ImageFilter.GaussianBlur(radius=1.0))
     cutout.putalpha(alpha)
 
-    # Composite on new background
-    bg = Image.new("RGBA", cutout.size, bg_color + (255,))
-    bg.paste(cutout, mask=cutout.getchannel("A"))
+    # Replace background
+    bg_color = ImageColor.getrgb(bg_hex)
+    background = Image.new("RGBA", cutout.size, bg_color + (255,))
+    background.paste(cutout, mask=cutout.getchannel("A"))
+    final = background.convert("RGB")
 
-    return bg.convert("RGB")
+    return final
 
+# Section 1: Upload Images
+st.subheader("📤 Upload Images")
+uploaded_files = st.file_uploader("Upload one or more images", type=["jpg", "jpeg", "png", "webp"], accept_multiple_files=True)
 
-# --- Upload Section ---
-uploaded_files = st.file_uploader("📁 Upload one or more images", type=["jpg", "jpeg", "png", "webp"], accept_multiple_files=True)
+# Section 2: Link Input
+st.subheader("🔗 Paste an Image URL (e.g. Jumia)")
+url = st.text_input("Paste image link")
 
-# --- URL Section ---
-url_input = st.text_area("🔗 Or paste image URLs (one per line):")
+image_queue = []
 
-# --- Collect All Images ---
-images_to_process = []
+# Handle image links
+if url:
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "https://www.jumia.co.ke/"
+        }
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            image_bytes = io.BytesIO(response.content)
+            image = Image.open(image_bytes).convert("RGBA")
+            image_queue.append(("linked_image", image))
+        else:
+            st.error(f"❌ Could not fetch image. Status code: {response.status_code}")
+    except Exception as e:
+        st.error(f"⚠️ Error loading image: {e}")
 
-# Uploaded files
+# Handle uploaded images
 if uploaded_files:
     for file in uploaded_files:
         try:
-            img = Image.open(file)
-            images_to_process.append((file.name, img))
+            image = Image.open(file).convert("RGBA")
+            image_queue.append((file.name, image))
         except UnidentifiedImageError:
-            st.warning(f"❌ Skipping invalid image: {file.name}")
+            st.warning(f"⚠️ `{file.name}` is not a valid image.")
 
-# URLs
-if url_input:
-    urls = [u.strip() for u in url_input.splitlines() if u.strip()]
-    for i, url in enumerate(urls):
-        try:
-            headers = {
-                "User-Agent": "Mozilla/5.0",
-                "Referer": "https://www.jumia.co.ke/",
-            }
-            r = requests.get(url, headers=headers, timeout=10)
-            if r.status_code == 200:
-                img = Image.open(io.BytesIO(r.content))
-                filename = f"url_image_{i+1}.jpg"
-                images_to_process.append((filename, img))
-            else:
-                st.warning(f"⚠️ Could not load: {url} (status {r.status_code})")
-        except Exception as e:
-            st.warning(f"⚠️ Error fetching {url}: {e}")
+# Process all images
+if image_queue:
+    st.subheader("🖼️ Processed Images")
+    for name, image in image_queue:
+        st.markdown(f"**🖼️ {name}**")
+        st.image(image, caption="Original", use_column_width=True)
 
-# --- Process Button ---
-if images_to_process:
-    st.subheader("✨ Processed Images")
-    for name, img in images_to_process:
-        try:
-            cleaned = process_image(img)
+        final = process_image(image)
+        st.image(final, caption="Cleaned", use_column_width=True)
 
-            st.markdown(f"**🖼️ {name}**")
-            st.image(cleaned, use_column_width=True)
-
-            # Prepare download
-            buf = io.BytesIO()
-            cleaned.save(buf, format="JPEG")
-            st.download_button("📥 Download", buf.getvalue(), file_name=f"cleaned_{name}", mime="image/jpeg")
-            st.markdown("---")
-
-        except Exception as e:
-            st.error(f"Error processing {name}: {e}")
-else:
-    st.info("⬆️ Upload files or paste image URLs to begin.")
-
+        buf = io.BytesIO()
+        final.save(buf, format="JPEG")
+        st.download_button("📥 Download Cleaned Image", data=buf.getvalue(),
+                           file_name=f"{os.path.splitext(name)[0]}_cleaned.jpg", mime="image/jpeg")
