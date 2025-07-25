@@ -1,12 +1,11 @@
 import streamlit as st
-from PIL import Image, ImageColor
+from PIL import Image, ImageColor, ImageFilter
 import requests
 import io
-import os
 import zipfile
 
-st.set_page_config(page_title="Batch Background Remover", layout="wide")
-st.title("🧼 Remove White Background (Keep Text, Tags & Labels)")
+st.set_page_config(page_title="Batch Background Cleaner", layout="wide")
+st.title("🧼 Background Cleaner + Shadow Adder")
 
 def remove_white_bg(image: Image.Image, threshold=240, replace_color="#F2F2F2") -> Image.Image:
     image = image.convert("RGBA")
@@ -23,15 +22,33 @@ def remove_white_bg(image: Image.Image, threshold=240, replace_color="#F2F2F2") 
             newData.append((r, g, b, a))
 
     image.putdata(newData)
-    return image.convert("RGB")
+    return image
 
-# Upload section
+def add_drop_shadow(img, offset=(15, 15), background_color="#F2F2F2", shadow_color="#aaaaaa", blur_radius=20):
+    img = img.convert("RGBA")
+    total_width = img.width + offset[0]
+    total_height = img.height + offset[1]
+
+    background = Image.new("RGBA", (total_width, total_height), background_color)
+
+    # Create shadow from alpha
+    alpha = img.getchannel("A")
+    shadow = Image.new("RGBA", img.size, shadow_color)
+    shadow.putalpha(alpha)
+
+    # Paste and blur
+    background.paste(shadow, offset, mask=alpha)
+    background = background.filter(ImageFilter.GaussianBlur(blur_radius))
+
+    # Paste the original image
+    background.paste(img, (0, 0), img)
+    return background.convert("RGB")
+
 uploaded_files = st.file_uploader("📤 Upload image(s)", type=["jpg", "jpeg", "png", "webp"], accept_multiple_files=True)
-url = st.text_input("🔗 Or paste image URL (e.g. Jumia product image)")
+url = st.text_input("🔗 Or paste direct image URL (e.g. Jumia)")
 
 image_queue = []
 
-# Add image from URL
 if url:
     try:
         headers = {
@@ -47,7 +64,6 @@ if url:
     except Exception as e:
         st.error(f"⚠️ Error loading image: {e}")
 
-# Add uploaded images
 if uploaded_files:
     for file in uploaded_files:
         try:
@@ -56,41 +72,34 @@ if uploaded_files:
         except:
             st.warning(f"{file.name} is not a valid image.")
 
-# Process and store in memory for zip
 zip_buffer = io.BytesIO()
 processed_files = []
 
 if image_queue:
-    st.subheader("✅ Processed Images")
-
+    st.subheader("✅ Processed Results")
     with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED) as zipf:
         for name, image in image_queue:
             cleaned = remove_white_bg(image)
+            shadowed = add_drop_shadow(cleaned)
 
-            # Display side-by-side in two columns
             col1, col2 = st.columns(2)
             with col1:
-                st.markdown(f"**🖼️ {name} – Original**")
+                st.markdown(f"**Original: {name}**")
                 st.image(image, width=300)
             with col2:
-                st.markdown("**🧼 Cleaned**")
-                st.image(cleaned, width=300)
+                st.markdown("**With Clean Background + Shadow**")
+                st.image(shadowed, width=300)
 
-            # Save cleaned image
             img_io = io.BytesIO()
-            cleaned.save(img_io, format="JPEG")
-            cleaned_filename = name  # Keep original name
-            zipf.writestr(cleaned_filename, img_io.getvalue())
+            shadowed.save(img_io, format="JPEG")
+            zipf.writestr(name, img_io.getvalue())
+            processed_files.append((name, img_io.getvalue()))
 
-            processed_files.append((cleaned_filename, img_io.getvalue()))
-
-    st.success("✅ All images processed successfully.")
-
-    # Download ZIP
     zip_buffer.seek(0)
     st.download_button(
         label="📦 Download All as ZIP",
         data=zip_buffer,
-        file_name="cleaned_images.zip",
+        file_name="cleaned_with_shadows.zip",
         mime="application/zip"
     )
+
