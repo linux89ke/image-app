@@ -4,9 +4,10 @@ import requests
 import io
 import zipfile
 
-st.set_page_config(page_title="Batch Background Cleaner", layout="wide")
-st.title("🧼 Background Cleaner + Shadow Adder")
+st.set_page_config(page_title="Product Cleaner + Shadow", layout="wide")
+st.title("🧼 Background Cleaner with Realistic Shadow")
 
+# Function to replace white background
 def remove_white_bg(image: Image.Image, threshold=240, replace_color="#F2F2F2") -> Image.Image:
     image = image.convert("RGBA")
     datas = image.getdata()
@@ -24,31 +25,36 @@ def remove_white_bg(image: Image.Image, threshold=240, replace_color="#F2F2F2") 
     image.putdata(newData)
     return image
 
-def add_drop_shadow(img, offset=(15, 15), background_color="#F2F2F2", shadow_color="#aaaaaa", blur_radius=20):
+# Function to add realistic shadow behind product
+def add_realistic_shadow(img, offset=(20, 20), blur_radius=30, shadow_color=(0, 0, 0, 100), bg_color="#F2F2F2"):
     img = img.convert("RGBA")
-    total_width = img.width + offset[0]
-    total_height = img.height + offset[1]
-
-    background = Image.new("RGBA", (total_width, total_height), background_color)
-
-    # Create shadow from alpha
     alpha = img.getchannel("A")
+
+    # Shadow from alpha mask
     shadow = Image.new("RGBA", img.size, shadow_color)
     shadow.putalpha(alpha)
 
-    # Paste and blur
-    background.paste(shadow, offset, mask=alpha)
-    background = background.filter(ImageFilter.GaussianBlur(blur_radius))
+    # Prepare background canvas
+    total_width = img.width + offset[0]
+    total_height = img.height + offset[1]
+    background = Image.new("RGBA", (total_width, total_height), bg_color)
 
-    # Paste the original image
+    # Blur and paste shadow
+    shadow = shadow.filter(ImageFilter.GaussianBlur(blur_radius))
+    background.paste(shadow, offset, shadow)
+
+    # Paste original image
     background.paste(img, (0, 0), img)
+
     return background.convert("RGB")
 
+# Image upload or link input
 uploaded_files = st.file_uploader("📤 Upload image(s)", type=["jpg", "jpeg", "png", "webp"], accept_multiple_files=True)
-url = st.text_input("🔗 Or paste direct image URL (e.g. Jumia)")
+url = st.text_input("🔗 Or paste a direct image URL (e.g. Jumia product image)")
 
 image_queue = []
 
+# Handle URL images
 if url:
     try:
         headers = {
@@ -64,6 +70,7 @@ if url:
     except Exception as e:
         st.error(f"⚠️ Error loading image: {e}")
 
+# Handle uploaded images
 if uploaded_files:
     for file in uploaded_files:
         try:
@@ -72,6 +79,7 @@ if uploaded_files:
         except:
             st.warning(f"{file.name} is not a valid image.")
 
+# Processing and display
 zip_buffer = io.BytesIO()
 processed_files = []
 
@@ -80,14 +88,14 @@ if image_queue:
     with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED) as zipf:
         for name, image in image_queue:
             cleaned = remove_white_bg(image)
-            shadowed = add_drop_shadow(cleaned)
+            shadowed = add_realistic_shadow(cleaned)
 
             col1, col2 = st.columns(2)
             with col1:
                 st.markdown(f"**Original: {name}**")
                 st.image(image, width=300)
             with col2:
-                st.markdown("**With Clean Background + Shadow**")
+                st.markdown("**Final Output (Clean + Shadow)**")
                 st.image(shadowed, width=300)
 
             img_io = io.BytesIO()
@@ -99,7 +107,6 @@ if image_queue:
     st.download_button(
         label="📦 Download All as ZIP",
         data=zip_buffer,
-        file_name="cleaned_with_shadows.zip",
+        file_name="processed_images_with_shadow.zip",
         mime="application/zip"
     )
-
