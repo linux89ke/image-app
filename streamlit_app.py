@@ -6,7 +6,7 @@ import os
 import zipfile
 
 st.set_page_config(page_title="Batch Background Remover", layout="wide")
-st.title("🧼 Remove White Background (Keep Text & Tags)")
+st.title("🧼 Remove White Background (Keep Text, Tags & Labels)")
 
 def remove_white_bg(image: Image.Image, threshold=240, replace_color="#F2F2F2") -> Image.Image:
     image = image.convert("RGBA")
@@ -73,7 +73,7 @@ if image_queue:
 
             img_io = io.BytesIO()
             cleaned.save(img_io, format="JPEG")
-            cleaned_filename = f"{os.path.splitext(name)[0]}_cleaned.jpg"
+            cleaned_filename = name  # Keep original name
             zipf.writestr(cleaned_filename, img_io.getvalue())
 
             processed_files.append((cleaned_filename, img_io.getvalue()))
