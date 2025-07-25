@@ -1,81 +1,71 @@
 import streamlit as st
-from PIL import Image, ImageColor, ImageFilter, UnidentifiedImageError
+from PIL import Image, ImageColor
 import requests
 import io
 import os
 
-from rembg import remove, new_session
+st.set_page_config(page_title="Color Key Background Remover", layout="wide")
+st.title("🎯 White Background Remover (Keeps All Text & Tags)")
 
-st.set_page_config(page_title="Image BG Remover", layout="wide")
-st.title("🧼 Product Image Background Remover")
-st.markdown("Upload or paste links — we’ll clean the background and keep text/tags intact.")
+def remove_white_bg(image: Image.Image, threshold=240, replace_color="#F2F2F2") -> Image.Image:
+    image = image.convert("RGBA")
+    datas = image.getdata()
+    newData = []
 
-# Setup Rembg session with best quality model
-session = new_session("isnet-general-use")  # 🧠 Best model for sharp edges & preserving tags
+    bg_rgb = ImageColor.getrgb(replace_color)
 
-# Function to process image
-def process_image(image: Image.Image, bg_hex="#F2F2F2") -> Image.Image:
-    cutout = remove(image, session=session)
+    for item in datas:
+        r, g, b, a = item
+        if r > threshold and g > threshold and b > threshold:
+            newData.append(bg_rgb + (255,))
+        else:
+            newData.append((r, g, b, a))
 
-    # Feather edges for smoothness
-    alpha = cutout.split()[3].filter(ImageFilter.GaussianBlur(radius=1.0))
-    cutout.putalpha(alpha)
+    image.putdata(newData)
+    return image.convert("RGB")
 
-    # Replace background
-    bg_color = ImageColor.getrgb(bg_hex)
-    background = Image.new("RGBA", cutout.size, bg_color + (255,))
-    background.paste(cutout, mask=cutout.getchannel("A"))
-    final = background.convert("RGB")
+# Handle image uploads
+uploaded_files = st.file_uploader("📤 Upload images", type=["jpg", "jpeg", "png", "webp"], accept_multiple_files=True)
 
-    return final
-
-# Section 1: Upload Images
-st.subheader("📤 Upload Images")
-uploaded_files = st.file_uploader("Upload one or more images", type=["jpg", "jpeg", "png", "webp"], accept_multiple_files=True)
-
-# Section 2: Link Input
-st.subheader("🔗 Paste an Image URL (e.g. Jumia)")
-url = st.text_input("Paste image link")
-
+# Handle Jumia or image links
+url = st.text_input("🔗 Or paste an image URL (Jumia allowed)")
 image_queue = []
 
-# Handle image links
 if url:
     try:
         headers = {
             "User-Agent": "Mozilla/5.0",
             "Referer": "https://www.jumia.co.ke/"
         }
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers)
         if response.status_code == 200:
-            image_bytes = io.BytesIO(response.content)
-            image = Image.open(image_bytes).convert("RGBA")
-            image_queue.append(("linked_image", image))
+            img = Image.open(io.BytesIO(response.content)).convert("RGBA")
+            image_queue.append(("linked_image", img))
         else:
-            st.error(f"❌ Could not fetch image. Status code: {response.status_code}")
+            st.error(f"Error loading image: {response.status_code}")
     except Exception as e:
-        st.error(f"⚠️ Error loading image: {e}")
+        st.error(f"⚠️ Could not fetch image: {e}")
 
-# Handle uploaded images
+# Add uploaded images to queue
 if uploaded_files:
     for file in uploaded_files:
         try:
             image = Image.open(file).convert("RGBA")
             image_queue.append((file.name, image))
-        except UnidentifiedImageError:
-            st.warning(f"⚠️ `{file.name}` is not a valid image.")
+        except:
+            st.warning(f"{file.name} is not a valid image.")
 
 # Process all images
 if image_queue:
-    st.subheader("🖼️ Processed Images")
+    st.subheader("🧽 Cleaned Images")
     for name, image in image_queue:
         st.markdown(f"**🖼️ {name}**")
         st.image(image, caption="Original", use_column_width=True)
 
-        final = process_image(image)
-        st.image(final, caption="Cleaned", use_column_width=True)
+        cleaned = remove_white_bg(image)
+        st.image(cleaned, caption="Cleaned (Text/Tags Preserved)", use_column_width=True)
 
         buf = io.BytesIO()
-        final.save(buf, format="JPEG")
+        cleaned.save(buf, format="JPEG")
         st.download_button("📥 Download Cleaned Image", data=buf.getvalue(),
                            file_name=f"{os.path.splitext(name)[0]}_cleaned.jpg", mime="image/jpeg")
