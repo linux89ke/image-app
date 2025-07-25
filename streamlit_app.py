@@ -5,7 +5,7 @@ import io
 import os
 
 st.set_page_config(page_title="Color Key Background Remover", layout="wide")
-st.title("🎯 White Background Remover (Keeps All Text & Tags)")
+st.title("🎯 White Background Remover")
 
 def remove_white_bg(image: Image.Image, threshold=240, replace_color="#F2F2F2") -> Image.Image:
     image = image.convert("RGBA")
