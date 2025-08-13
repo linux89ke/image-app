@@ -15,6 +15,10 @@ def remove_any_bg(image: Image.Image, bg_choice="white", size=(1000, 1000)) -> I
     # Remove background (returns transparent PNG)
     no_bg = remove(image)
 
+    if bg_choice == "transparent":
+        # Keep transparency and resize
+        return no_bg.resize(size)
+
     # Convert choice to RGB
     if bg_choice == "white":
         bg_rgb = (255, 255, 255)
@@ -37,7 +41,7 @@ def remove_any_bg(image: Image.Image, bg_choice="white", size=(1000, 1000)) -> I
 uploaded_files = st.file_uploader("📤 Upload image(s)", type=["jpg", "jpeg", "png", "webp"], accept_multiple_files=True)
 url = st.text_input("🔗 Or paste image URL (e.g. Jumia product image)")
 
-bg_choice = st.radio("🎨 Background Replacement", ["white", "#F2F2F2"])
+bg_choice = st.radio("🎨 Background Replacement", ["white", "#F2F2F2", "transparent"])
 resize_width = st.number_input("📏 Resize Width (px)", min_value=100, max_value=5000, value=1000, step=50)
 resize_height = st.number_input("📐 Resize Height (px)", min_value=100, max_value=5000, value=1000, step=50)
 
@@ -52,7 +56,7 @@ if url:
         response = requests.get(url, headers=headers)
         if response.status_code == 200:
             img = Image.open(io.BytesIO(response.content)).convert("RGBA")
-            image_queue.append(("linked_image.jpg", img))
+            image_queue.append(("linked_image.png", img))
         else:
             st.error(f"❌ Could not load image. HTTP {response.status_code}")
     except Exception as e:
@@ -90,7 +94,10 @@ if image_queue:
 
             # Save cleaned image to ZIP
             img_io = io.BytesIO()
-            cleaned.save(img_io, format="JPEG")
+            if bg_choice == "transparent":
+                cleaned.save(img_io, format="PNG")  # Keep transparency
+            else:
+                cleaned.save(img_io, format="JPEG")
             zipf.writestr(name, img_io.getvalue())
 
     st.success("✅ All images processed successfully.")
@@ -105,3 +112,4 @@ if image_queue:
         file_name="cleaned_images.zip",
         mime="application/zip"
     )
+
