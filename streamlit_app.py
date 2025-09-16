@@ -1,8 +1,8 @@
 import streamlit as st
 from PIL import Image
 from rembg import remove
-from streamlit_cropper import st_cropper
-import io, zipfile
+import io
+import zipfile
 
 st.set_page_config(page_title="Background Remover & Cropper", layout="wide")
 st.title("🧼 Remove Background + ✂️ Crop & Resize (1000x1000)")
@@ -11,7 +11,7 @@ st.title("🧼 Remove Background + ✂️ Crop & Resize (1000x1000)")
 # Settings
 # --------------------------
 if "custom_color" not in st.session_state:
-    st.session_state.custom_color = "#F2F2F2"   # default custom background
+    st.session_state.custom_color = "#F2F2F2"  # default custom background
 
 col1, col2 = st.columns([3,1])
 with col1:
@@ -37,7 +37,7 @@ uploaded_files = st.file_uploader(
 )
 
 # --------------------------
-# Process
+# Process Images
 # --------------------------
 zip_buffer = io.BytesIO()
 
@@ -50,10 +50,10 @@ if uploaded_files:
                 # Load original
                 image = Image.open(file).convert("RGBA")
 
-                # Step 1: Background removal
+                # Step 1: Remove background
                 output = remove(image)
 
-                # Apply background option
+                # Step 2: Apply background color
                 if bg_choice == "White":
                     bg = Image.new("RGBA", output.size, (255, 255, 255, 255))
                     output = Image.alpha_composite(bg, output)
@@ -63,24 +63,33 @@ if uploaded_files:
                     output = Image.alpha_composite(bg, output)
 
                 st.markdown(f"### ✂️ Crop {file.name}")
-                st.info("Drag on the image below to crop. The result will be resized to 1000x1000 px.")
+                st.info("Use sliders below to select crop area. The result will be resized to 1000x1000 px.")
 
-                # Step 2: Crop interactively
-                cropped = st_cropper(output, aspect_ratio=(1, 1), return_type="pil", box_color="#FF0000")
+                # --------------------------
+                # Step 3: Crop with sliders
+                w, h = output.size
+                left = st.slider(f"{file.name} - Left", 0, w, 0)
+                top = st.slider(f"{file.name} - Top", 0, h, 0)
+                right = st.slider(f"{file.name} - Right", left+1, w, w)
+                bottom = st.slider(f"{file.name} - Bottom", top+1, h, h)
 
-                # Step 3: Resize to 1000x1000
+                cropped = output.crop((left, top, right, bottom))
+
+                # --------------------------
+                # Step 4: Resize to 1000x1000
                 final_img = cropped.resize((1000, 1000), Image.LANCZOS)
 
-                # Show result
+                # Show final image
                 st.image(final_img, caption=f"{file.name} – Final (1000x1000)", use_container_width=True)
 
+                # --------------------------
                 # Save for download
                 img_io = io.BytesIO()
                 final_img.save(img_io, format="PNG")
                 out_name = f"{file.name.rsplit('.', 1)[0]}_cleaned_cropped.png"
                 zipf.writestr(out_name, img_io.getvalue())
 
-                # Individual download
+                # Individual download button
                 st.download_button(
                     label=f"⬇️ Download {file.name}",
                     data=img_io.getvalue(),
@@ -93,6 +102,7 @@ if uploaded_files:
             except Exception as e:
                 st.error(f"⚠️ Failed to process {file.name}: {e}")
 
+    # --------------------------
     # ZIP download
     zip_buffer.seek(0)
     st.download_button(
