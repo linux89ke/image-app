@@ -1,20 +1,34 @@
 import streamlit as st
 from PIL import Image
 from rembg import remove
-import io
-import zipfile
+from streamlit_cropper import st_cropper
+import io, zipfile
 
-st.set_page_config(page_title="Background Remover", layout="wide")
-st.title("🧼 Remove Background (Local AI - rembg)")
+st.set_page_config(page_title="Background Remover & Cropper", layout="wide")
+st.title("🧼 Remove Background + ✂️ Crop & Resize (1000x1000)")
 
 # --------------------------
 # Settings
 # --------------------------
-replace_color = st.color_picker("🎨 Background color", "#F2F2F2")
+if "custom_color" not in st.session_state:
+    st.session_state.custom_color = "#F2F2F2"   # default custom background
+
+col1, col2 = st.columns([3,1])
+with col1:
+    st.session_state.custom_color = st.color_picker(
+        "🎨 Background color (for 'Custom Color' option)",
+        value=st.session_state.custom_color,
+        key="color_picker"
+    )
+with col2:
+    if st.button("🔄 Reset Color"):
+        st.session_state.custom_color = "#F2F2F2"
+        st.experimental_rerun()
+
 bg_choice = st.radio("Background type", ["Transparent", "White", "Custom Color"])
 
 # --------------------------
-# Upload Images (drag & drop supported)
+# Upload Images
 # --------------------------
 uploaded_files = st.file_uploader(
     "📤 Drag & drop image(s) here or click to browse",
@@ -23,7 +37,7 @@ uploaded_files = st.file_uploader(
 )
 
 # --------------------------
-# Process Images
+# Process
 # --------------------------
 zip_buffer = io.BytesIO()
 
@@ -36,47 +50,45 @@ if uploaded_files:
                 # Load original
                 image = Image.open(file).convert("RGBA")
 
-                # Remove background
+                # Step 1: Background removal
                 output = remove(image)
 
-                # Handle background options
+                # Apply background option
                 if bg_choice == "White":
                     bg = Image.new("RGBA", output.size, (255, 255, 255, 255))
                     output = Image.alpha_composite(bg, output)
                 elif bg_choice == "Custom Color":
-                    rgb = tuple(int(replace_color.lstrip("#")[i:i+2], 16) for i in (0, 2, 4))
+                    rgb = tuple(int(st.session_state.custom_color.lstrip("#")[i:i+2], 16) for i in (0, 2, 4))
                     bg = Image.new("RGBA", output.size, rgb + (255,))
                     output = Image.alpha_composite(bg, output)
 
-                # Force output to 1000x1000 px (centered, preserving aspect ratio)
-                final_img = Image.new("RGBA", (1000, 1000), (0, 0, 0, 0))
-                output.thumbnail((1000, 1000), Image.LANCZOS)
-                x = (1000 - output.width) // 2
-                y = (1000 - output.height) // 2
-                final_img.paste(output, (x, y), output)
+                st.markdown(f"### ✂️ Crop {file.name}")
+                st.info("Drag on the image below to crop. The result will be resized to 1000x1000 px.")
 
-                # Preview (already 1000x1000)
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.markdown(f"**🖼️ {file.name} – Original**")
-                    st.image(image, width=300)
-                with col2:
-                    st.markdown("**🧼 Cleaned (1000×1000)**")
-                    st.image(final_img, width=300)
+                # Step 2: Crop interactively
+                cropped = st_cropper(output, aspect_ratio=(1, 1), return_type="pil", box_color="#FF0000")
 
-                # Save cleaned image
+                # Step 3: Resize to 1000x1000
+                final_img = cropped.resize((1000, 1000), Image.LANCZOS)
+
+                # Show result
+                st.image(final_img, caption=f"{file.name} – Final (1000x1000)", use_container_width=True)
+
+                # Save for download
                 img_io = io.BytesIO()
                 final_img.save(img_io, format="PNG")
-                out_name = f"{file.name.rsplit('.', 1)[0]}_cleaned.png"
+                out_name = f"{file.name.rsplit('.', 1)[0]}_cleaned_cropped.png"
                 zipf.writestr(out_name, img_io.getvalue())
 
-                # Download button
+                # Individual download
                 st.download_button(
                     label=f"⬇️ Download {file.name}",
                     data=img_io.getvalue(),
                     file_name=out_name,
                     mime="image/png"
                 )
+
+                st.markdown("---")
 
             except Exception as e:
                 st.error(f"⚠️ Failed to process {file.name}: {e}")
