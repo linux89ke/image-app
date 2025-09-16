@@ -14,11 +14,11 @@ replace_color = st.color_picker("🎨 Background color", "#F2F2F2")
 bg_choice = st.radio("Background type", ["Transparent", "White", "Custom Color"])
 
 # --------------------------
-# Upload Images
+# Upload Images (drag & drop supported)
 # --------------------------
 uploaded_files = st.file_uploader(
-    "📤 Upload image(s)", 
-    type=["jpg", "jpeg", "png"], 
+    "📤 Drag & drop image(s) here or click to browse",
+    type=["jpg", "jpeg", "png"],
     accept_multiple_files=True
 )
 
@@ -48,21 +48,25 @@ if uploaded_files:
                     bg = Image.new("RGBA", output.size, rgb + (255,))
                     output = Image.alpha_composite(bg, output)
 
-                # Preview
-                preview = output.copy()
-                preview.thumbnail((600, 600))
+                # Force output to 1000x1000 px (centered, preserving aspect ratio)
+                final_img = Image.new("RGBA", (1000, 1000), (0, 0, 0, 0))
+                output.thumbnail((1000, 1000), Image.LANCZOS)
+                x = (1000 - output.width) // 2
+                y = (1000 - output.height) // 2
+                final_img.paste(output, (x, y), output)
 
+                # Preview (already 1000x1000)
                 col1, col2 = st.columns(2)
                 with col1:
                     st.markdown(f"**🖼️ {file.name} – Original**")
                     st.image(image, width=300)
                 with col2:
-                    st.markdown("**🧼 Cleaned**")
-                    st.image(preview, width=300)
+                    st.markdown("**🧼 Cleaned (1000×1000)**")
+                    st.image(final_img, width=300)
 
                 # Save cleaned image
                 img_io = io.BytesIO()
-                output.save(img_io, format="PNG")
+                final_img.save(img_io, format="PNG")
                 out_name = f"{file.name.rsplit('.', 1)[0]}_cleaned.png"
                 zipf.writestr(out_name, img_io.getvalue())
 
