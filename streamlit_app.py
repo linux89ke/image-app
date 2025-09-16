@@ -1,107 +1,81 @@
 import streamlit as st
 from PIL import Image
-import requests
+from rembg import remove
 import io
 import zipfile
 
 st.set_page_config(page_title="Background Remover", layout="wide")
-st.title("🧼 Remove Background (Powered by remove.bg API)")
+st.title("🧼 Remove Background (Local AI - rembg)")
 
 # --------------------------
 # Settings
 # --------------------------
-REMOVE_BG_API_KEY = st.secrets["REMOVE_BG_API_KEY"]  # Store your key in Streamlit secrets
 replace_color = st.color_picker("🎨 Background color", "#F2F2F2")
 bg_choice = st.radio("Background type", ["Transparent", "White", "Custom Color"])
 
 # --------------------------
-# Upload & URL input
+# Upload Images
 # --------------------------
-uploaded_files = st.file_uploader("📤 Upload image(s)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
-url = st.text_input("🔗 Or paste image URL")
-
-image_queue = []
-
-# --------------------------
-# Load image from URL
-# --------------------------
-if url:
-    try:
-        response = requests.get(url)
-        if response.status_code == 200:
-            img = Image.open(io.BytesIO(response.content))
-            image_queue.append(("linked_image.png", img))
-        else:
-            st.error(f"❌ Could not load image. HTTP {response.status_code}")
-    except Exception as e:
-        st.error(f"⚠️ Error loading image: {e}")
+uploaded_files = st.file_uploader(
+    "📤 Upload image(s)", 
+    type=["jpg", "jpeg", "png"], 
+    accept_multiple_files=True
+)
 
 # --------------------------
-# Load uploaded images
-# --------------------------
-if uploaded_files:
-    for file in uploaded_files:
-        try:
-            image = Image.open(file)
-            image_queue.append((file.name, image))
-        except:
-            st.warning(f"{file.name} is not a valid image.")
-
-# --------------------------
-# Process images
+# Process Images
 # --------------------------
 zip_buffer = io.BytesIO()
-processed_files = []
 
-if image_queue:
+if uploaded_files:
     st.subheader("✅ Processed Images")
+
     with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED) as zipf:
-        for name, image in image_queue:
-            # Convert image to bytes
-            img_byte_arr = io.BytesIO()
-            image.save(img_byte_arr, format="PNG")
-            img_byte_arr.seek(0)
+        for file in uploaded_files:
+            try:
+                # Load original
+                image = Image.open(file).convert("RGBA")
 
-            # Send to remove.bg API
-            bg_color = None
-            if bg_choice == "White":
-                bg_color = "ffffff"
-            elif bg_choice == "Custom Color":
-                bg_color = replace_color.lstrip("#")
+                # Remove background
+                output = remove(image)
 
-            response = requests.post(
-                "https://api.remove.bg/v1.0/removebg",
-                files={"image_file": img_byte_arr},
-                data={"size": "auto", "bg_color": bg_color} if bg_color else {"size": "auto"},
-                headers={"X-Api-Key": REMOVE_BG_API_KEY},
-            )
+                # Handle background options
+                if bg_choice == "White":
+                    bg = Image.new("RGBA", output.size, (255, 255, 255, 255))
+                    output = Image.alpha_composite(bg, output)
+                elif bg_choice == "Custom Color":
+                    rgb = tuple(int(replace_color.lstrip("#")[i:i+2], 16) for i in (0, 2, 4))
+                    bg = Image.new("RGBA", output.size, rgb + (255,))
+                    output = Image.alpha_composite(bg, output)
 
-            if response.status_code == requests.codes.ok:
-                cleaned_img = Image.open(io.BytesIO(response.content)).resize((1000, 1000))
-                
+                # Preview
+                preview = output.copy()
+                preview.thumbnail((600, 600))
+
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.markdown(f"**🖼️ {name} – Original**")
+                    st.markdown(f"**🖼️ {file.name} – Original**")
                     st.image(image, width=300)
                 with col2:
                     st.markdown("**🧼 Cleaned**")
-                    st.image(cleaned_img, width=300)
+                    st.image(preview, width=300)
 
-                # Save in ZIP
+                # Save cleaned image
                 img_io = io.BytesIO()
-                cleaned_img.save(img_io, format="PNG")
-                zipf.writestr(name, img_io.getvalue())
+                output.save(img_io, format="PNG")
+                out_name = f"{file.name.rsplit('.', 1)[0]}_cleaned.png"
+                zipf.writestr(out_name, img_io.getvalue())
 
-                # Add individual download button
+                # Download button
                 st.download_button(
-                    label=f"⬇️ Download {name}",
+                    label=f"⬇️ Download {file.name}",
                     data=img_io.getvalue(),
-                    file_name=name,
+                    file_name=out_name,
                     mime="image/png"
                 )
 
-            else:
-                st.error(f"❌ Failed to process {name}: {response.text}")
+            except Exception as e:
+                st.error(f"⚠️ Failed to process {file.name}: {e}")
 
     # ZIP download
     zip_buffer.seek(0)
