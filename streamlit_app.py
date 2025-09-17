@@ -1,84 +1,164 @@
 import streamlit as st
-from PIL import Image, ImageOps
-from rembg import remove
+from PIL import Image, ImageColor
+import requests
 import io
 import zipfile
+from rembg import remove  # AI background removal
 
 st.set_page_config(page_title="Batch Background Remover", layout="wide")
-st.title("🛍️ E-Commerce Product Background Remover")
+st.title("🧼 AI Background Remover (Keep Tags & Labels)")
 
 # ---------------------------
-# Background removal that keeps ALL tags/labels intact
+# Background removal (preserve tags/labels)
 # ---------------------------
-def remove_bg_keep_all(image: Image.Image, bg_choice="white", size=(1000, 1000), border_ratio=0.05) -> Image.Image:
+def remove_bg_keep_tags(image: Image.Image, bg_choice="white", size=(1000, 1000), autocrop=True) -> Image.Image:
     # Step 1: Remove background
     no_bg = remove(image).convert("RGBA")
-    orig_rgba = image.convert("RGBA")
 
-    # Step 2: Restore ALL original pixels where rembg made transparent holes
-    restored = Image.new("RGBA", orig_rgba.size)
+    # Step 2: Compare with original to restore tags/labels
+    orig_rgba = image.convert("RGBA")
     pixels_no_bg = no_bg.getdata()
     pixels_orig = orig_rgba.getdata()
+
     new_pixels = []
     for p_clean, p_orig in zip(pixels_no_bg, pixels_orig):
-        if p_clean[3] == 0:  # transparent pixel
-            new_pixels.append(p_orig)  # keep original
+        # If cleaned pixel is transparent but original pixel is not white-ish → restore it
+        if p_clean[3] == 0 and not (p_orig[0] > 240 and p_orig[1] > 240 and p_orig[2] > 240):
+            new_pixels.append(p_orig)  # restore tag/label
         else:
             new_pixels.append(p_clean)
+
+    restored = Image.new("RGBA", no_bg.size)
     restored.putdata(new_pixels)
 
-    # Step 3: Fit into square canvas with border
-    w, h = size
-    border_x, border_y = int(w * border_ratio), int(h * border_ratio)
-    canvas = Image.new("RGBA", (w, h), (255, 255, 255, 0))
+    # Step 3: Crop to product bounding box
+    if autocrop:
+        bbox = restored.getbbox()
+        if bbox:
+            restored = restored.crop(bbox)
 
-    # Resize product with margin
-    max_w, max_h = w - 2 * border_x, h - 2 * border_y
-    restored.thumbnail((max_w, max_h), Image.LANCZOS)
+    # Step 4: Handle background choice
+    if bg_choice == "transparent":
+        # Transparent canvas
+        canvas = Image.new("RGBA", size, (0, 0, 0, 0))
+        restored.thumbnail(size, Image.LANCZOS)
+        x = (size[0] - restored.size[0]) // 2
+        y = (size[1] - restored.size[1]) // 2
+        canvas.paste(restored, (x, y), mask=restored.split()[3])
+        return canvas
 
-    # Paste centered
-    pos_x = (w - restored.width) // 2
-    pos_y = (h - restored.height) // 2
-    canvas.paste(restored, (pos_x, pos_y), restored)
-
-    # Step 4: Replace transparent with chosen background
     if bg_choice == "white":
-        bg_color = (255, 255, 255)
+        bg_rgb = (255, 255, 255)
     else:
-        bg_color = (242, 242, 242)  # encoded color
-    final = Image.new("RGB", (w, h), bg_color)
-    final.paste(canvas, mask=canvas.split()[3])  # keep alpha
-    return final
+        bg_rgb = ImageColor.getrgb("#F2F2F2")
 
+    bg_layer = Image.new("RGB", size, bg_rgb)
+    restored.thumbnail(size, Image.LANCZOS)
+    x = (size[0] - restored.size[0]) // 2
+    y = (size[1] - restored.size[1]) // 2
+    bg_layer.paste(restored, (x, y), mask=restored.split()[3])
 
-# ---------------------------
-# Streamlit App
-# ---------------------------
-uploaded_files = st.file_uploader("Upload product images", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+    return bg_layer
 
-bg_choice = st.radio("Background color", ["white", "encoded (#F2F2F2)"])
+# --------------------------
+# Upload section and inputs
+# --------------------------
+uploaded_files = st.file_uploader(
+    "📤 Upload image(s)", 
+    type=["jpg", "jpeg", "png", "webp"], 
+    accept_multiple_files=True
+)
+url = st.text_input("🔗 Or paste image URL (e.g. Jumia product image)")
 
+bg_choice = st.radio("🎨 Background Replacement", ["white", "#F2F2F2", "transparent"])
+resize_width = st.number_input("📏 Resize Width (px)", min_value=100, max_value=5000, value=1000, step=50)
+resize_height = st.number_input("📐 Resize Height (px)", min_value=100, max_value=5000, value=1000, step=50)
+autocrop = st.checkbox("✂️ Auto-crop and center product", value=True)
+
+image_queue = []
+
+# --------------------------
+# Load image from URL
+# --------------------------
+if url:
+    try:
+        headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.jumia.co.ke/"}
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            img = Image.open(io.BytesIO(response.content)).convert("RGBA")
+            image_queue.append(("linked_image.png", img))
+        else:
+            st.error(f"❌ Could not load image. HTTP {response.status_code}")
+    except Exception as e:
+        st.error(f"⚠️ Error loading image: {e}")
+
+# --------------------------
+# Load uploaded images
+# --------------------------
 if uploaded_files:
-    processed_images = []
     for file in uploaded_files:
-        img = Image.open(file).convert("RGBA")
-        processed = remove_bg_keep_all(img, bg_choice="white" if bg_choice == "white" else "encoded")
-        processed_images.append((file.name, processed))
+        try:
+            image = Image.open(file).convert("RGBA")
+            image_queue.append((file.name, image))
+        except:
+            st.warning(f"{file.name} is not a valid image.")
 
-        st.image(processed, caption=f"Processed: {file.name}", use_column_width=True)
+# --------------------------
+# Process images
+# --------------------------
+zip_buffer = io.BytesIO()
 
-    # Download buttons
-    st.subheader("Download Options")
-    for fname, img in processed_images:
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        st.download_button(f"⬇️ Download {fname}", buf.getvalue(), file_name=f"processed_{fname}", mime="image/png")
+if image_queue:
+    st.subheader("✅ Processed Images")
+    with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED) as zipf:
+        for name, image in image_queue:
+            cleaned = remove_bg_keep_tags(
+                image, 
+                bg_choice, 
+                (resize_width, resize_height), 
+                autocrop=autocrop
+            )
 
-    # Download all as ZIP
-    zip_buf = io.BytesIO()
-    with zipfile.ZipFile(zip_buf, "w") as zf:
-        for fname, img in processed_images:
-            buf = io.BytesIO()
-            img.save(buf, format="PNG")
-            zf.writestr(f"processed_{fname}", buf.getvalue())
-    st.download_button("⬇️ Download All (ZIP)", zip_buf.getvalue(), file_name="processed_images.zip", mime="application/zip")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown(f"**🖼️ {name} – Original**")
+                st.image(image, width=300)
+            with col2:
+                st.markdown("**🧼 Cleaned (Tags Preserved)**")
+                st.image(cleaned, width=300)
+
+            # Save cleaned image
+            img_io = io.BytesIO()
+            if bg_choice == "transparent":
+                cleaned.save(img_io, format="PNG")
+                file_ext = ".png"
+            else:
+                cleaned.save(img_io, format="JPEG")
+                file_ext = ".jpg"
+
+            img_bytes = img_io.getvalue()
+            cleaned_name = name.rsplit(".", 1)[0] + file_ext
+
+            # Add to ZIP
+            zipf.writestr(cleaned_name, img_bytes)
+
+            # Individual download button
+            st.download_button(
+                label=f"⬇️ Download {cleaned_name}",
+                data=img_bytes,
+                file_name=cleaned_name,
+                mime="image/png" if bg_choice == "transparent" else "image/jpeg"
+            )
+
+    st.success("✅ All images processed successfully.")
+
+    # --------------------------
+    # Download ZIP
+    # --------------------------
+    zip_buffer.seek(0)
+    st.download_button(
+        label="📦 Download All as ZIP",
+        data=zip_buffer,
+        file_name="cleaned_images.zip",
+        mime="application/zip"
+    )
