@@ -6,7 +6,7 @@ import zipfile
 from rembg import remove  # AI background removal
 
 st.set_page_config(page_title="Batch Background Remover", layout="wide")
-st.title("🧼 AI Background Remover (Keep Tags & Labels)")
+st.title("Background Remover")
 
 # ---------------------------
 # Background removal (preserve tags/labels)
