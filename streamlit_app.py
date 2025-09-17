@@ -6,47 +6,57 @@ import zipfile
 from rembg import remove  # AI background removal
 
 st.set_page_config(page_title="Batch Background Remover", layout="wide")
-st.title("🧼 AI Background Remover (Product Isolation)")
+st.title("🧼 AI Background Remover (Keep Tags & Labels)")
 
 # ---------------------------
-# Background removal + crop
+# Background removal (preserve tags/labels)
 # ---------------------------
-def remove_any_bg(image: Image.Image, bg_choice="white", size=(1000, 1000), autocrop=True) -> Image.Image:
-    # Remove background (returns transparent PNG)
+def remove_bg_keep_tags(image: Image.Image, bg_choice="white", size=(1000, 1000), autocrop=True) -> Image.Image:
+    # Step 1: Remove background
     no_bg = remove(image).convert("RGBA")
 
-    if autocrop:
-        # Crop to bounding box of non-transparent area
-        bbox = no_bg.getbbox()
-        if bbox:
-            no_bg = no_bg.crop(bbox)
+    # Step 2: Compare with original to restore tags/labels
+    orig_rgba = image.convert("RGBA")
+    pixels_no_bg = no_bg.getdata()
+    pixels_orig = orig_rgba.getdata()
 
-    # If transparent option
+    new_pixels = []
+    for p_clean, p_orig in zip(pixels_no_bg, pixels_orig):
+        # If cleaned pixel is transparent but original pixel is not white-ish → restore it
+        if p_clean[3] == 0 and not (p_orig[0] > 240 and p_orig[1] > 240 and p_orig[2] > 240):
+            new_pixels.append(p_orig)  # restore tag/label
+        else:
+            new_pixels.append(p_clean)
+
+    restored = Image.new("RGBA", no_bg.size)
+    restored.putdata(new_pixels)
+
+    # Step 3: Crop to product bounding box
+    if autocrop:
+        bbox = restored.getbbox()
+        if bbox:
+            restored = restored.crop(bbox)
+
+    # Step 4: Handle background choice
     if bg_choice == "transparent":
-        # Resize & center on transparent canvas
+        # Transparent canvas
         canvas = Image.new("RGBA", size, (0, 0, 0, 0))
-        no_bg.thumbnail(size, Image.LANCZOS)
-        x = (size[0] - no_bg.size[0]) // 2
-        y = (size[1] - no_bg.size[1]) // 2
-        canvas.paste(no_bg, (x, y), mask=no_bg.split()[3])
+        restored.thumbnail(size, Image.LANCZOS)
+        x = (size[0] - restored.size[0]) // 2
+        y = (size[1] - restored.size[1]) // 2
+        canvas.paste(restored, (x, y), mask=restored.split()[3])
         return canvas
 
-    # Convert choice to RGB
     if bg_choice == "white":
         bg_rgb = (255, 255, 255)
     else:
         bg_rgb = ImageColor.getrgb("#F2F2F2")
 
-    # Create new background
     bg_layer = Image.new("RGB", size, bg_rgb)
-
-    # Resize product proportionally
-    no_bg.thumbnail(size, Image.LANCZOS)
-
-    # Center the product
-    x = (size[0] - no_bg.size[0]) // 2
-    y = (size[1] - no_bg.size[1]) // 2
-    bg_layer.paste(no_bg, (x, y), mask=no_bg.split()[3])
+    restored.thumbnail(size, Image.LANCZOS)
+    x = (size[0] - restored.size[0]) // 2
+    y = (size[1] - restored.size[1]) // 2
+    bg_layer.paste(restored, (x, y), mask=restored.split()[3])
 
     return bg_layer
 
@@ -102,7 +112,7 @@ if image_queue:
     st.subheader("✅ Processed Images")
     with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED) as zipf:
         for name, image in image_queue:
-            cleaned = remove_any_bg(
+            cleaned = remove_bg_keep_tags(
                 image, 
                 bg_choice, 
                 (resize_width, resize_height), 
@@ -114,7 +124,7 @@ if image_queue:
                 st.markdown(f"**🖼️ {name} – Original**")
                 st.image(image, width=300)
             with col2:
-                st.markdown("**🧼 Cleaned**")
+                st.markdown("**🧼 Cleaned (Tags Preserved)**")
                 st.image(cleaned, width=300)
 
             # Save cleaned image
