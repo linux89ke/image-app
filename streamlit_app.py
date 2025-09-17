@@ -1,74 +1,67 @@
 import streamlit as st
-from PIL import Image, ImageColor
+from PIL import Image, ImageColor, ImageChops
 import requests
 import io
 import zipfile
 from rembg import remove  # AI background removal
 
 st.set_page_config(page_title="Batch Background Remover", layout="wide")
-st.title("Background Remover")
+st.title("🧼 AI Background Remover (Keep Tags & Labels)")
 
 # ---------------------------
 # Background removal (preserve tags/labels)
 # ---------------------------
 def remove_bg_keep_tags(image: Image.Image, bg_choice="white", size=(1000, 1000), autocrop=True) -> Image.Image:
     """
-    Removes the background from an image while attempting to preserve non-white elements
-    like tags and labels that the AI might otherwise remove.
+    Removes the background using an advanced masking technique to preserve sharp edges on tags.
+    This avoids the "feathered" or "dirty" look from simpler pixel-replacement methods.
     """
-    # Step 1: Remove background using rembg
+    # Step 1: Get the AI-processed image and extract its alpha mask.
+    # This mask has great, soft edges for the main subject but might miss tags.
     no_bg = remove(image).convert("RGBA")
+    rembg_alpha_mask = no_bg.split()[3]
 
-    # Step 2: Compare with original to restore tags/labels
+    # Step 2: Create a second, high-contrast mask from the original image.
+    # This mask identifies all non-white areas, capturing tags and labels perfectly.
     orig_rgba = image.convert("RGBA")
-    pixels_no_bg = no_bg.getdata()
     pixels_orig = orig_rgba.getdata()
+    
+    # Create a list of 255 (white) for non-background pixels, 0 (black) for background
+    tag_mask_pixels = [255 if not (p[0] > 245 and p[1] > 245 and p[2] > 245) and p[3] > 0 else 0 for p in pixels_orig]
+    tag_mask = Image.new("L", orig_rgba.size) # "L" mode is 8-bit grayscale
+    tag_mask.putdata(tag_mask_pixels)
 
-    new_pixels = []
-    for p_clean, p_orig in zip(pixels_no_bg, pixels_orig):
-        # If the AI-cleaned pixel is transparent, but the original pixel was NOT pure white,
-        # it's likely a tag or label that should be restored.
-        
-        # --- IMPROVEMENT ---
-        # The threshold is now stricter (245 instead of 240) to better capture
-        # the anti-aliased edges of tags, resulting in a cleaner look.
-        is_transparent_in_cleaned = p_clean[3] == 0
-        is_not_white_in_original = not (p_orig[0] > 245 and p_orig[1] > 245 and p_orig[2] > 245)
+    # Step 3: Combine the two masks.
+    # ImageChops.lighter takes the brightest pixel from both masks. This creates a final
+    # mask that is the perfect union of the AI's subject detection and our tag detection.
+    final_mask = ImageChops.lighter(rembg_alpha_mask, tag_mask)
 
-        if is_transparent_in_cleaned and is_not_white_in_original:
-            new_pixels.append(p_orig)  # Restore the original pixel (tag/label)
-        else:
-            new_pixels.append(p_clean) # Keep the AI-cleaned pixel
+    # Step 4: Apply the final, combined mask to the original image.
+    # This cuts out the complete subject (product + tags) from the original source,
+    # ensuring no quality is lost and all edges are as they should be.
+    restored = Image.new("RGBA", orig_rgba.size, (0,0,0,0)) # Start with a transparent canvas
+    restored.paste(orig_rgba, mask=final_mask)
 
-    restored = Image.new("RGBA", no_bg.size)
-    restored.putdata(new_pixels)
-
-    # Step 3: Crop to product bounding box
+    # Step 5: Crop to the content's bounding box.
     if autocrop:
         bbox = restored.getbbox()
         if bbox:
             restored = restored.crop(bbox)
 
-    # Step 4: Handle background choice and resize
+    # Step 6: Create the final canvas with the chosen background and place the image.
     if bg_choice == "transparent":
-        # Create a transparent canvas
         canvas = Image.new("RGBA", size, (0, 0, 0, 0))
     else:
-        # Create a solid color canvas
         bg_rgb = (255, 255, 255) if bg_choice == "white" else ImageColor.getrgb("#F2F2F2")
         canvas = Image.new("RGB", size, bg_rgb)
     
-    # Resize the restored image to fit within the canvas while maintaining aspect ratio
     restored.thumbnail(size, Image.Resampling.LANCZOS)
     
-    # Calculate position to center the image
     x = (size[0] - restored.size[0]) // 2
     y = (size[1] - restored.size[1]) // 2
     
-    # Paste the restored image onto the canvas using its alpha channel as a mask
-    # For RGB canvas, we need to convert the restored image to RGBA to get the mask
-    paste_image = restored if restored.mode == 'RGBA' else restored.convert('RGBA')
-    canvas.paste(paste_image, (x, y), mask=paste_image.split()[3])
+    # The mask for pasting is the alpha channel of the restored image itself.
+    canvas.paste(restored, (x, y), mask=restored.split()[3] if restored.mode == 'RGBA' else None)
 
     return canvas
 
@@ -94,7 +87,6 @@ image_queue = []
 # --------------------------
 if url:
     try:
-        # Use headers to mimic a browser and avoid being blocked
         headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.google.com/"}
         response = requests.get(url, headers=headers)
         if response.status_code == 200:
@@ -124,8 +116,7 @@ if image_queue:
     st.subheader("✅ Processed Images")
     
     with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zipf:
-        # Add a spinner to show progress during processing
-        with st.spinner('Removing backgrounds... please wait.'):
+        with st.spinner('Removing backgrounds with advanced masking...'):
             for name, image in image_queue:
                 cleaned = remove_bg_keep_tags(
                     image,
@@ -142,27 +133,20 @@ if image_queue:
                     st.markdown("**🧼 Cleaned (Tags Preserved)**")
                     st.image(cleaned)
 
-                # Save cleaned image to an in-memory buffer
                 img_io = io.BytesIO()
                 if bg_choice == "transparent":
                     cleaned.save(img_io, format="PNG")
-                    file_ext = ".png"
-                    mime_type = "image/png"
+                    file_ext, mime_type = (".png", "image/png")
                 else:
-                    # If the canvas has an alpha channel, convert to RGB before saving as JPEG
                     if cleaned.mode == 'RGBA':
                         cleaned = cleaned.convert('RGB')
                     cleaned.save(img_io, format="JPEG")
-                    file_ext = ".jpg"
-                    mime_type = "image/jpeg"
+                    file_ext, mime_type = (".jpg", "image/jpeg")
                 
                 img_bytes = img_io.getvalue()
                 cleaned_name = name.rsplit(".", 1)[0] + "_cleaned" + file_ext
-
-                # Add the processed image to the ZIP archive
                 zipf.writestr(cleaned_name, img_bytes)
 
-                # Individual download button
                 st.download_button(
                     label=f"⬇️ Download {cleaned_name}",
                     data=img_bytes,
@@ -173,9 +157,6 @@ if image_queue:
 
     st.success("✅ All images processed successfully.")
 
-    # --------------------------
-    # Download All as ZIP
-    # --------------------------
     zip_buffer.seek(0)
     st.download_button(
         label="📦 Download All as ZIP",
