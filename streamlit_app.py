@@ -3,52 +3,54 @@ from PIL import Image, ImageColor, ImageChops
 import requests
 import io
 import zipfile
-from rembg import remove  # AI background removal
+from rembg import remove  
 
+# Configuration
 st.set_page_config(page_title="Batch Background Remover", layout="wide")
-st.title("🧼 AI Background Remover (Keep Tags & Labels)")
 
-# ---------------------------
-# Background removal (preserve tags/labels)
-# ---------------------------
+# Custom CSS for a professional look
+st.markdown("""
+    <style>
+    .main-title {
+        font-size: 2.5rem;
+        font-weight: 700;
+        color: #1E1E1E;
+        margin-bottom: 20px;
+    }
+    .status-text {
+        font-size: 0.9rem;
+        color: #666;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+st.markdown('<p class="main-title">AI Background Remover</p>', unsafe_allow_html=True)
+
 def remove_bg_keep_tags(image: Image.Image, bg_choice="white", size=(1000, 1000), autocrop=True) -> Image.Image:
     """
-    Removes the background using an advanced masking technique to preserve sharp edges on tags.
-    This avoids the "feathered" or "dirty" look from simpler pixel-replacement methods.
+    Removes the background using advanced masking to preserve product tags.
     """
-    # Step 1: Get the AI-processed image and extract its alpha mask.
-    # This mask has great, soft edges for the main subject but might miss tags.
     no_bg = remove(image).convert("RGBA")
     rembg_alpha_mask = no_bg.split()[3]
 
-    # Step 2: Create a second, high-contrast mask from the original image.
-    # This mask identifies all non-white areas, capturing tags and labels perfectly.
     orig_rgba = image.convert("RGBA")
     pixels_orig = orig_rgba.getdata()
     
-    # Create a list of 255 (white) for non-background pixels, 0 (black) for background
+    # Logic to capture tags/labels by identifying non-white pixels
     tag_mask_pixels = [255 if not (p[0] > 245 and p[1] > 245 and p[2] > 245) and p[3] > 0 else 0 for p in pixels_orig]
-    tag_mask = Image.new("L", orig_rgba.size) # "L" mode is 8-bit grayscale
+    tag_mask = Image.new("L", orig_rgba.size) 
     tag_mask.putdata(tag_mask_pixels)
 
-    # Step 3: Combine the two masks.
-    # ImageChops.lighter takes the brightest pixel from both masks. This creates a final
-    # mask that is the perfect union of the AI's subject detection and our tag detection.
     final_mask = ImageChops.lighter(rembg_alpha_mask, tag_mask)
 
-    # Step 4: Apply the final, combined mask to the original image.
-    # This cuts out the complete subject (product + tags) from the original source,
-    # ensuring no quality is lost and all edges are as they should be.
-    restored = Image.new("RGBA", orig_rgba.size, (0,0,0,0)) # Start with a transparent canvas
+    restored = Image.new("RGBA", orig_rgba.size, (0,0,0,0))
     restored.paste(orig_rgba, mask=final_mask)
 
-    # Step 5: Crop to the content's bounding box.
     if autocrop:
         bbox = restored.getbbox()
         if bbox:
             restored = restored.crop(bbox)
 
-    # Step 6: Create the final canvas with the chosen background and place the image.
     if bg_choice == "transparent":
         canvas = Image.new("RGBA", size, (0, 0, 0, 0))
     else:
@@ -60,63 +62,61 @@ def remove_bg_keep_tags(image: Image.Image, bg_choice="white", size=(1000, 1000)
     x = (size[0] - restored.size[0]) // 2
     y = (size[1] - restored.size[1]) // 2
     
-    # The mask for pasting is the alpha channel of the restored image itself.
     canvas.paste(restored, (x, y), mask=restored.split()[3] if restored.mode == 'RGBA' else None)
 
     return canvas
 
 # --------------------------
-# UI: Upload section and inputs
+# Sidebar / Settings Section
+# --------------------------
+with st.sidebar:
+    st.header("Settings")
+    bg_choice = st.radio("Background Canvas", ["white", "#F2F2F2", "transparent"])
+    resize_width = st.number_input("Width (px)", min_value=100, max_value=5000, value=1000, step=50)
+    resize_height = st.number_input("Height (px)", min_value=100, max_value=5000, value=1000, step=50)
+    autocrop = st.checkbox("Enable Auto-crop", value=True)
+
+# --------------------------
+# Main Input Section
 # --------------------------
 uploaded_files = st.file_uploader(
-    "📤 Upload image(s)",
+    "Upload Image Files",
     type=["jpg", "jpeg", "png", "webp"],
     accept_multiple_files=True
 )
-url = st.text_input("🔗 Or paste image URL (e.g. from an e-commerce site)")
-
-bg_choice = st.radio("🎨 Background Replacement", ["white", "#F2F2F2", "transparent"])
-resize_width = st.number_input("📏 Resize Width (px)", min_value=100, max_value=5000, value=1000, step=50)
-resize_height = st.number_input("📐 Resize Height (px)", min_value=100, max_value=5000, value=1000, step=50)
-autocrop = st.checkbox("✂️ Auto-crop and center product", value=True)
+url = st.text_input("Source URL", placeholder="https://example.com/product.jpg")
 
 image_queue = []
 
-# --------------------------
-# Load image from URL
-# --------------------------
 if url:
     try:
-        headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.google.com/"}
+        headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(url, headers=headers)
         if response.status_code == 200:
             img = Image.open(io.BytesIO(response.content))
             image_queue.append(("linked_image.png", img))
         else:
-            st.error(f"❌ Could not load image. HTTP Status: {response.status_code}")
+            st.error(f"Error: Connection failed (Status {response.status_code})")
     except Exception as e:
-        st.error(f"⚠️ Error loading image from URL: {e}")
+        st.error(f"Error: {e}")
 
-# --------------------------
-# Load uploaded images
-# --------------------------
 if uploaded_files:
     for file in uploaded_files:
         try:
             image = Image.open(file)
             image_queue.append((file.name, image))
         except Exception as e:
-            st.warning(f"Could not open {file.name}. Is it a valid image? Error: {e}")
+            st.warning(f"Could not open {file.name}: {e}")
 
 # --------------------------
-# Process images and display results
+# Processing Engine
 # --------------------------
 if image_queue:
     zip_buffer = io.BytesIO()
-    st.subheader("✅ Processed Images")
+    st.markdown("### Output Gallery")
     
     with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zipf:
-        with st.spinner('Removing backgrounds with advanced masking...'):
+        with st.spinner('Processing images...'):
             for name, image in image_queue:
                 cleaned = remove_bg_keep_tags(
                     image,
@@ -127,11 +127,11 @@ if image_queue:
 
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.markdown(f"**🖼️ {name} – Original**")
-                    st.image(image)
+                    st.caption(f"Original: {name}")
+                    st.image(image, use_container_width=True)
                 with col2:
-                    st.markdown("**🧼 Cleaned (Tags Preserved)**")
-                    st.image(cleaned)
+                    st.caption("Processed Subject")
+                    st.image(cleaned, use_container_width=True)
 
                 img_io = io.BytesIO()
                 if bg_choice == "transparent":
@@ -148,18 +148,16 @@ if image_queue:
                 zipf.writestr(cleaned_name, img_bytes)
 
                 st.download_button(
-                    label=f"⬇️ Download {cleaned_name}",
+                    label=f"Download {cleaned_name}",
                     data=img_bytes,
                     file_name=cleaned_name,
                     mime=mime_type
                 )
                 st.divider()
 
-    st.success("✅ All images processed successfully.")
-
     zip_buffer.seek(0)
     st.download_button(
-        label="📦 Download All as ZIP",
+        label="Download All Assets (ZIP)",
         data=zip_buffer,
         file_name="cleaned_images.zip",
         mime="application/zip",
